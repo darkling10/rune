@@ -16,7 +16,6 @@ export default function ProjectView() {
   // API Key Form State
   const [provider, setProvider] = useState('openai')
   const [apiKey, setApiKey] = useState('')
-  const [baseUrl, setBaseUrl] = useState('')
   const [keyStatus, setKeyStatus] = useState<string | null>(null)
 
   useEffect(() => {
@@ -38,8 +37,7 @@ export default function ProjectView() {
     try {
       await axios.post(`/api/v1/projects/${id}/credentials`, {
         provider,
-        api_key: apiKey,
-        base_url: baseUrl
+        api_key: apiKey
       })
       setKeyStatus('Key saved successfully!')
       setApiKey('')
