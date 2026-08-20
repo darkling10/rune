@@ -14,6 +14,12 @@ type ProjectRepository interface {
 	ListProjects(ctx context.Context) ([]models.Project, error)
 	CreateCredential(ctx context.Context, cred *models.LLMCredential) error
 	GetCredentialByProjectID(ctx context.Context, id uuid.UUID) (*models.LLMCredential, error)
+
+	CreateExecution(ctx context.Context, exec *models.Execution) error
+	UpdateExecutionStatus(ctx context.Context, id uuid.UUID, status models.ExecutionStatus) error
+	AppendExecutionLog(ctx context.Context, id uuid.UUID, log string) error
+	ListExecutions(ctx context.Context, projectID uuid.UUID) ([]models.Execution, error)
+	GetExecution(ctx context.Context, id uuid.UUID) (*models.Execution, error)
 }
 
 type projectRepo struct {
@@ -55,4 +61,31 @@ func (r *projectRepo) GetCredentialByProjectID(ctx context.Context, projectID uu
 		return nil, err
 	}
 	return &cred, nil
+}
+
+func (r *projectRepo) CreateExecution(ctx context.Context, exec *models.Execution) error {
+	return r.db.WithContext(ctx).Create(exec).Error
+}
+
+func (r *projectRepo) UpdateExecutionStatus(ctx context.Context, id uuid.UUID, status models.ExecutionStatus) error {
+	return r.db.WithContext(ctx).Model(&models.Execution{}).Where("id = ?", id).Update("status", status).Error
+}
+
+func (r *projectRepo) AppendExecutionLog(ctx context.Context, id uuid.UUID, log string) error {
+	// Simple append in Postgres. For scale, we'd use unnest or a separate table, but this is fine for MVP.
+	return r.db.WithContext(ctx).Model(&models.Execution{}).Where("id = ?", id).
+		Update("logs", gorm.Expr("logs || ?", log+"\n")).Error
+}
+
+func (r *projectRepo) ListExecutions(ctx context.Context, projectID uuid.UUID) ([]models.Execution, error) {
+	var execs []models.Execution
+	err := r.db.WithContext(ctx).Select("id, project_id, commit_sha, status, created_at, updated_at").
+		Where("project_id = ?", projectID).Order("created_at desc").Find(&execs).Error
+	return execs, err
+}
+
+func (r *projectRepo) GetExecution(ctx context.Context, id uuid.UUID) (*models.Execution, error) {
+	var exec models.Execution
+	err := r.db.WithContext(ctx).First(&exec, "id = ?", id).Error
+	return &exec, err
 }

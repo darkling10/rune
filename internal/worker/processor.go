@@ -8,9 +8,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/deployerai/deployer/internal/models"
 	"github.com/deployerai/deployer/internal/repository"
 	"github.com/deployerai/deployer/pkg/pipeline"
 	"github.com/go-git/go-git/v5"
+	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 )
@@ -65,6 +67,8 @@ type redisLogWriter struct {
 	rdb       *redis.Client
 	channel   string
 	projectID string
+	repo      repository.ProjectRepository
+	execID    uuid.UUID
 }
 
 func (w *redisLogWriter) Write(p []byte) (n int, err error) {
@@ -72,6 +76,14 @@ func (w *redisLogWriter) Write(p []byte) (n int, err error) {
 	// Optionally print to local stdout as well
 	fmt.Print(msg)
 	w.rdb.Publish(context.Background(), w.channel, msg)
+	
+	// Append to Postgres
+	// In production, we'd batch this or do it asynchronously to avoid slowing down the pipeline,
+	// but for an MVP, this is sufficient.
+	if w.repo != nil && w.execID != uuid.Nil {
+		_ = w.repo.AppendExecutionLog(context.Background(), w.execID, msg)
+	}
+	
 	return len(p), nil
 }
 
@@ -84,9 +96,23 @@ func (processor *redisTaskProcessor) ProcessTaskRunPipeline(ctx context.Context,
 	log.Printf("Starting Pipeline for Project: %s, Commit: %s", payload.ProjectID, payload.CommitSHA)
 	log.Printf("Repository URL: %s", payload.RepoURL)
 
+	// Create an Execution Record in DB
+	exec := &models.Execution{
+		ProjectID: payload.ProjectID,
+		CommitSHA: payload.CommitSHA,
+		Status:    models.ExecutionStatusRunning,
+	}
+	if err := processor.repo.CreateExecution(ctx, exec); err != nil {
+		log.Printf("Failed to create execution record: %v", err)
+		// We can choose to fail the build here, or just proceed without persisting
+	}
+
 	// 1. Create a secure, isolated temporary workspace
 	workDir, err := os.MkdirTemp("", "deployer-workspace-*")
 	if err != nil {
+		if exec.ID != uuid.Nil {
+			_ = processor.repo.UpdateExecutionStatus(ctx, exec.ID, models.ExecutionStatusFailed)
+		}
 		return fmt.Errorf("failed to create temporary workspace: %w", err)
 	}
 	defer os.RemoveAll(workDir) // Ensure we clean up after the pipeline runs!
@@ -99,6 +125,9 @@ func (processor *redisTaskProcessor) ProcessTaskRunPipeline(ctx context.Context,
 		Progress: os.Stdout,
 	})
 	if err != nil {
+		if exec.ID != uuid.Nil {
+			_ = processor.repo.UpdateExecutionStatus(ctx, exec.ID, models.ExecutionStatusFailed)
+		}
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
 
@@ -111,6 +140,9 @@ func (processor *redisTaskProcessor) ProcessTaskRunPipeline(ctx context.Context,
 
 	config, err := pipeline.ParseConfig(configPath)
 	if err != nil {
+		if exec.ID != uuid.Nil {
+			_ = processor.repo.UpdateExecutionStatus(ctx, exec.ID, models.ExecutionStatusFailed)
+		}
 		return fmt.Errorf("pipeline configuration error: %w", err)
 	}
 
@@ -128,17 +160,25 @@ func (processor *redisTaskProcessor) ProcessTaskRunPipeline(ctx context.Context,
 	// 5. Execute the Pipeline
 	logWriter := &redisLogWriter{
 		rdb:       processor.rdb,
-		channel   : fmt.Sprintf("logs:%s", payload.ProjectID),
+		channel:   fmt.Sprintf("logs:%s", payload.ProjectID),
 		projectID: payload.ProjectID.String(),
+		repo:      processor.repo,
+		execID:    exec.ID,
 	}
 
 	runner := pipeline.NewRunner(config, workDir, aiProv, aiKey, aiBaseURL, logWriter)
 	if err := runner.Execute(); err != nil {
 		log.Printf("Pipeline failed for Commit %s: %v", payload.CommitSHA, err)
+		if exec.ID != uuid.Nil {
+			_ = processor.repo.UpdateExecutionStatus(ctx, exec.ID, models.ExecutionStatusFailed)
+		}
 		return err
 	}
 
 	log.Printf("Pipeline completed successfully for Commit: %s", payload.CommitSHA)
+	if exec.ID != uuid.Nil {
+		_ = processor.repo.UpdateExecutionStatus(ctx, exec.ID, models.ExecutionStatusSuccess)
+	}
 	return nil
 }
 

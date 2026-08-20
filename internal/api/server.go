@@ -79,6 +79,10 @@ func (s *Server) setupRoutes() {
 
 		// Webhooks
 		r.Post("/projects/{projectID}/webhooks/github", s.handleGitHubWebhook)
+
+		// Executions
+		r.Get("/projects/{projectID}/executions", s.handleListExecutions)
+		r.Get("/projects/{projectID}/executions/{execID}", s.handleGetExecution)
 	})
 }
 
@@ -278,11 +282,69 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	// Optional: send an initial connection success message
 	_ = conn.WriteMessage(websocket.TextMessage, []byte("\033[1;36mConnected to Rune Log Stream...\033[0m\n"))
 
+	// We must have a concurrent reader to process Ping/Pong and Close frames from the client!
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				log.Printf("Client read loop exited: %v", err)
+				return
+			}
+		}
+	}()
+
 	// Stream logs from Redis to the WebSocket
-	for msg := range ch {
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(msg.Payload)); err != nil {
-			log.Printf("Client disconnected from log stream: %v", err)
-			break
+	for {
+		select {
+		case msg := <-ch:
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(msg.Payload)); err != nil {
+				log.Printf("Failed to write to client: %v", err)
+				return
+			}
+		case <-done:
+			log.Printf("Client disconnected from log stream")
+			return
+		case <-r.Context().Done():
+			return
 		}
 	}
+}
+
+func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
+	projectIDStr := chi.URLParam(r, "projectID")
+	projectID, err := uuid.Parse(projectIDStr)
+	if err != nil {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
+
+	execs, err := s.projectRepo.ListExecutions(r.Context(), projectID)
+	if err != nil {
+		log.Printf("Error fetching executions: %v", err)
+		http.Error(w, "Failed to fetch executions", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(execs)
+}
+
+func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
+	execIDStr := chi.URLParam(r, "execID")
+	execID, err := uuid.Parse(execIDStr)
+	if err != nil {
+		http.Error(w, "Invalid execution ID", http.StatusBadRequest)
+		return
+	}
+
+	exec, err := s.projectRepo.GetExecution(r.Context(), execID)
+	if err != nil {
+		log.Printf("Error fetching execution %s: %v", execIDStr, err)
+		http.Error(w, "Execution not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(exec)
 }

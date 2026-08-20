@@ -38,6 +38,7 @@ func InitDB(dsn string) (*gorm.DB, error) {
 	err = db.AutoMigrate(
 		&models.Project{},
 		&models.LLMCredential{},
+		&models.Execution{},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to auto-migrate database: %w", err)
