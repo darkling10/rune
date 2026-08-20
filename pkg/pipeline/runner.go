@@ -1,23 +1,32 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+
+	"github.com/deployerai/deployer/pkg/ai"
 )
 
 // Runner represents the pipeline execution engine.
 type Runner struct {
-	Config  *Config
-	WorkDir string
+	Config    *Config
+	WorkDir   string
+	AIKey     string
+	AIProv    string
+	AIBaseURL string
 }
 
 // NewRunner initializes a new Runner.
-func NewRunner(config *Config, workDir string) *Runner {
+func NewRunner(config *Config, workDir string, aiProv, aiKey, aiBaseURL string) *Runner {
 	return &Runner{
-		Config:  config,
-		WorkDir: workDir,
+		Config:    config,
+		WorkDir:   workDir,
+		AIProv:    aiProv,
+		AIKey:     aiKey,
+		AIBaseURL: aiBaseURL,
 	}
 }
 
@@ -67,10 +76,51 @@ func (r *Runner) executeShellCommand(step Step) error {
 func (r *Runner) executeUsesAction(step Step) error {
 	log.Printf("Executing built-in AI/Action: %s", step.Uses)
 
-	// Placeholder for AI Engine Integration
-	if step.Uses == "deployerai/ai-review@v1" {
-		log.Println("=> Initiating AI Code Review (Placeholder)...")
-		log.Println("=> AI Review Passed!")
+	if step.Uses == "rune/ai-review@v1" {
+		log.Println("=> Initiating AI Code Review...")
+		
+		if r.AIKey == "" {
+			return fmt.Errorf("AI Credentials not found for project. Cannot perform AI Review")
+		}
+
+		// 1. Fetch git diff
+		cmd := exec.Command("git", "diff", "HEAD~1", "HEAD")
+		cmd.Dir = r.WorkDir
+		out, err := cmd.Output()
+		if err != nil {
+			// If HEAD~1 fails (e.g. initial commit), try getting diff against empty tree
+			cmd = exec.Command("git", "show", "HEAD")
+			cmd.Dir = r.WorkDir
+			out, err = cmd.Output()
+			if err != nil {
+				return fmt.Errorf("failed to fetch git diff: %w", err)
+			}
+		}
+
+		diff := string(out)
+		if len(diff) == 0 {
+			log.Println("=> No code changes detected. Skipping AI review.")
+			return nil
+		}
+
+		log.Printf("=> Analyzing %d bytes of diff with %s...", len(diff), r.AIProv)
+
+		// 2. We will call the AI provider package here.
+		provider, err := ai.Factory(r.AIProv, r.AIKey, r.AIBaseURL)
+		if err != nil {
+			return fmt.Errorf("failed to initialize AI Provider: %w", err)
+		}
+
+		isPass, reason, err := provider.ReviewCodeDiff(context.Background(), diff)
+		if err != nil {
+			return fmt.Errorf("AI Review failed unexpectedly: %w", err)
+		}
+
+		log.Printf("=> AI Review Result: %s", reason)
+		if !isPass {
+			return fmt.Errorf("pipeline aborted: AI Review rejected the code changes")
+		}
+		
 	} else {
 		log.Printf("Unknown action: %s", step.Uses)
 	}

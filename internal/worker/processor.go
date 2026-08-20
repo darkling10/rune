@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/deployerai/deployer/internal/repository"
 	"github.com/deployerai/deployer/pkg/pipeline"
 	"github.com/go-git/go-git/v5"
 	"github.com/hibiken/asynq"
@@ -20,9 +21,10 @@ type TaskProcessor interface {
 
 type redisTaskProcessor struct {
 	server *asynq.Server
+	repo   repository.ProjectRepository
 }
 
-func NewRedisTaskProcessor(redisOpt asynq.RedisConnOpt) TaskProcessor {
+func NewRedisTaskProcessor(redisOpt asynq.RedisConnOpt, repo repository.ProjectRepository) TaskProcessor {
 	server := asynq.NewServer(
 		redisOpt,
 		asynq.Config{
@@ -40,6 +42,7 @@ func NewRedisTaskProcessor(redisOpt asynq.RedisConnOpt) TaskProcessor {
 
 	return &redisTaskProcessor{
 		server: server,
+		repo:   repo,
 	}
 }
 
@@ -93,8 +96,19 @@ func (processor *redisTaskProcessor) ProcessTaskRunPipeline(ctx context.Context,
 		return fmt.Errorf("pipeline configuration error: %w", err)
 	}
 
-	// 4. Execute the Pipeline
-	runner := pipeline.NewRunner(config, workDir)
+	// 4. Fetch AI Credentials for the Project
+	cred, err := processor.repo.GetCredentialByProjectID(ctx, payload.ProjectID)
+	var aiProv, aiKey, aiBaseURL string
+	if err != nil {
+		log.Printf("Warning: Could not fetch AI credentials for project (AI steps will fail): %v", err)
+	} else {
+		aiProv = string(cred.Provider)
+		aiKey = cred.APIKey
+		aiBaseURL = cred.BaseURL
+	}
+
+	// 5. Execute the Pipeline
+	runner := pipeline.NewRunner(config, workDir, aiProv, aiKey, aiBaseURL)
 	if err := runner.Execute(); err != nil {
 		log.Printf("Pipeline failed for Commit %s: %v", payload.CommitSHA, err)
 		return err

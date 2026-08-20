@@ -53,7 +53,7 @@ func main() {
 
 	// Initialize Task Worker Architecture
 	taskDistributor := worker.NewRedisTaskDistributor(redisOpt)
-	taskProcessor := worker.NewRedisTaskProcessor(redisOpt)
+	taskProcessor := worker.NewRedisTaskProcessor(redisOpt, projectRepo)
 
 	go func() {
 		log.Println("Starting Task Processor...")
