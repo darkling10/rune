@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # PostgreSQL - Primary Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: deployer-postgres
+    environment:
+      POSTGRES_USER: deployer_user
+      POSTGRES_PASSWORD: deployer_password
+      POSTGRES_DB: deployer_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deployer_user -d deployer_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis - Used for caching and background job queues (essential for CI pipelines)
+  redis:
+    image: redis:7-alpine
+    container_name: deployer-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Floci - Fast local AWS cloud emulator
+  floci:
+    image: floci/floci:latest
+    container_name: deployer-floci
+    ports:
+      - "4566:4566"
+
+
+volumes:
+  postgres_data:
+  redis_data:
