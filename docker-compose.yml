@@ -40,6 +40,22 @@ services:
     ports:
       - "4566:4566"
 
+  # Rune Server - The CI/CD Engine and Dashboard
+  rune-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deployer-rune-server
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://deployer_user:deployer_password@postgres:5432/deployer_db?sslmode=disable
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:

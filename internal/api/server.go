@@ -13,6 +13,9 @@ import (
 	"github.com/google/uuid"
 	"log"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
@@ -36,6 +39,7 @@ func NewServer(repo repository.ProjectRepository, taskDistributor worker.TaskDis
 	}
 	s.setupMiddleware()
 	s.setupRoutes()
+	s.setupStaticRoutes()
 	return s
 }
 
@@ -347,4 +351,31 @@ func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(exec)
+}
+
+// Serve React App
+// We will serve static files from the ./web/dist directory (built by Docker).
+func (s *Server) setupStaticRoutes() {
+	// If the user hits any non-API route, serve the React app (SPA fallback)
+	workDir, _ := os.Getwd()
+	filesDir := http.Dir(filepath.Join(workDir, "web", "dist"))
+
+	s.router.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		
+		// If path doesn't start with /api, we serve the frontend
+		if !strings.HasPrefix(path, "/api") {
+			// Check if file exists in the dist directory
+			fullPath := filepath.Join(workDir, "web", "dist", path)
+			if _, err := os.Stat(fullPath); os.IsNotExist(err) || path == "/" {
+				// If file doesn't exist, serve index.html (SPA routing)
+				http.ServeFile(w, r, filepath.Join(workDir, "web", "dist", "index.html"))
+				return
+			}
+			
+			// Otherwise serve the static file
+			fs := http.StripPrefix("/", http.FileServer(filesDir))
+			fs.ServeHTTP(w, r)
+		}
+	})
 }
