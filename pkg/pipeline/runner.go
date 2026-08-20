@@ -3,8 +3,8 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
-	"os"
 	"os/exec"
 
 	"github.com/deployerai/deployer/pkg/ai"
@@ -17,40 +17,54 @@ type Runner struct {
 	AIKey     string
 	AIProv    string
 	AIBaseURL string
+	Logger    io.Writer
 }
 
 // NewRunner initializes a new Runner.
-func NewRunner(config *Config, workDir string, aiProv, aiKey, aiBaseURL string) *Runner {
+func NewRunner(config *Config, workDir string, aiProv, aiKey, aiBaseURL string, logger io.Writer) *Runner {
 	return &Runner{
 		Config:    config,
 		WorkDir:   workDir,
 		AIProv:    aiProv,
 		AIKey:     aiKey,
 		AIBaseURL: aiBaseURL,
+		Logger:    logger,
 	}
 }
 
 // Execute loops through the pipeline steps and executes them sequentially.
 func (r *Runner) Execute() error {
-	log.Printf("Starting execution of pipeline version: %s in workspace: %s", r.Config.Version, r.WorkDir)
+	msg := fmt.Sprintf("Starting execution of pipeline version: %s in workspace: %s\n", r.Config.Version, r.WorkDir)
+	log.Print(msg)
+	fmt.Fprint(r.Logger, msg)
 
 	for i, step := range r.Config.Pipeline {
-		log.Printf("--- Step %d: %s ---", i+1, step.Name)
+		stepMsg := fmt.Sprintf("--- Step %d: %s ---\n", i+1, step.Name)
+		log.Print(stepMsg)
+		fmt.Fprint(r.Logger, stepMsg)
 
 		if step.Run != "" {
 			if err := r.executeShellCommand(step); err != nil {
+				errMsg := fmt.Sprintf("step '%s' failed: %v\n", step.Name, err)
+				fmt.Fprint(r.Logger, errMsg)
 				return fmt.Errorf("step '%s' failed: %w", step.Name, err)
 			}
 		} else if step.Uses != "" {
 			if err := r.executeUsesAction(step); err != nil {
+				errMsg := fmt.Sprintf("step '%s' failed: %v\n", step.Name, err)
+				fmt.Fprint(r.Logger, errMsg)
 				return fmt.Errorf("step '%s' failed: %w", step.Name, err)
 			}
 		} else {
-			log.Printf("Warning: Step '%s' has neither 'run' nor 'uses' defined. Skipping.", step.Name)
+			warnMsg := fmt.Sprintf("Warning: Step '%s' has neither 'run' nor 'uses' defined. Skipping.\n", step.Name)
+			log.Print(warnMsg)
+			fmt.Fprint(r.Logger, warnMsg)
 		}
 	}
 
-	log.Println("Pipeline execution completed successfully.")
+	successMsg := "Pipeline execution completed successfully.\n"
+	log.Print(successMsg)
+	fmt.Fprint(r.Logger, successMsg)
 	return nil
 }
 
@@ -63,8 +77,8 @@ func (r *Runner) executeShellCommand(step Step) error {
 	cmd.Dir = r.WorkDir
 
 	// Stream output to stdout/stderr of the worker
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = r.Logger
+	cmd.Stderr = r.Logger
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("command execution failed: %w", err)
@@ -74,10 +88,14 @@ func (r *Runner) executeShellCommand(step Step) error {
 }
 
 func (r *Runner) executeUsesAction(step Step) error {
-	log.Printf("Executing built-in AI/Action: %s", step.Uses)
+	msg := fmt.Sprintf("Executing built-in AI/Action: %s\n", step.Uses)
+	log.Print(msg)
+	fmt.Fprint(r.Logger, msg)
 
 	if step.Uses == "rune/ai-review@v1" {
-		log.Println("=> Initiating AI Code Review...")
+		initMsg := "=> Initiating AI Code Review...\n"
+		log.Print(initMsg)
+		fmt.Fprint(r.Logger, initMsg)
 		
 		if r.AIKey == "" {
 			return fmt.Errorf("AI Credentials not found for project. Cannot perform AI Review")
@@ -99,11 +117,15 @@ func (r *Runner) executeUsesAction(step Step) error {
 
 		diff := string(out)
 		if len(diff) == 0 {
-			log.Println("=> No code changes detected. Skipping AI review.")
+			skipMsg := "=> No code changes detected. Skipping AI review.\n"
+			log.Print(skipMsg)
+			fmt.Fprint(r.Logger, skipMsg)
 			return nil
 		}
 
-		log.Printf("=> Analyzing %d bytes of diff with %s...", len(diff), r.AIProv)
+		analyzeMsg := fmt.Sprintf("=> Analyzing %d bytes of diff with %s...\n", len(diff), r.AIProv)
+		log.Print(analyzeMsg)
+		fmt.Fprint(r.Logger, analyzeMsg)
 
 		// 2. We will call the AI provider package here.
 		provider, err := ai.Factory(r.AIProv, r.AIKey, r.AIBaseURL)
@@ -116,13 +138,18 @@ func (r *Runner) executeUsesAction(step Step) error {
 			return fmt.Errorf("AI Review failed unexpectedly: %w", err)
 		}
 
-		log.Printf("=> AI Review Result: %s", reason)
+		resMsg := fmt.Sprintf("=> AI Review Result: %s\n", reason)
+		log.Print(resMsg)
+		fmt.Fprint(r.Logger, resMsg)
+		
 		if !isPass {
 			return fmt.Errorf("pipeline aborted: AI Review rejected the code changes")
 		}
 		
 	} else {
-		log.Printf("Unknown action: %s", step.Uses)
+		unMsg := fmt.Sprintf("Unknown action: %s\n", step.Uses)
+		log.Print(unMsg)
+		fmt.Fprint(r.Logger, unMsg)
 	}
 
 	return nil

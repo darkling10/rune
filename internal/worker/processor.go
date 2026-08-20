@@ -12,6 +12,7 @@ import (
 	"github.com/deployerai/deployer/pkg/pipeline"
 	"github.com/go-git/go-git/v5"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 // TaskProcessor is an interface for starting the task processor.
@@ -22,9 +23,10 @@ type TaskProcessor interface {
 type redisTaskProcessor struct {
 	server *asynq.Server
 	repo   repository.ProjectRepository
+	rdb    *redis.Client
 }
 
-func NewRedisTaskProcessor(redisOpt asynq.RedisConnOpt, repo repository.ProjectRepository) TaskProcessor {
+func NewRedisTaskProcessor(redisOpt asynq.RedisConnOpt, repo repository.ProjectRepository, rdb *redis.Client) TaskProcessor {
 	server := asynq.NewServer(
 		redisOpt,
 		asynq.Config{
@@ -43,6 +45,7 @@ func NewRedisTaskProcessor(redisOpt asynq.RedisConnOpt, repo repository.ProjectR
 	return &redisTaskProcessor{
 		server: server,
 		repo:   repo,
+		rdb:    rdb,
 	}
 }
 
@@ -57,6 +60,21 @@ func (processor *redisTaskProcessor) Start() error {
 }
 
 // ProcessTaskRunPipeline handles the actual execution of a pipeline.
+
+type redisLogWriter struct {
+	rdb       *redis.Client
+	channel   string
+	projectID string
+}
+
+func (w *redisLogWriter) Write(p []byte) (n int, err error) {
+	msg := string(p)
+	// Optionally print to local stdout as well
+	fmt.Print(msg)
+	w.rdb.Publish(context.Background(), w.channel, msg)
+	return len(p), nil
+}
+
 func (processor *redisTaskProcessor) ProcessTaskRunPipeline(ctx context.Context, task *asynq.Task) error {
 	var payload RunPipelinePayload
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
@@ -108,7 +126,13 @@ func (processor *redisTaskProcessor) ProcessTaskRunPipeline(ctx context.Context,
 	}
 
 	// 5. Execute the Pipeline
-	runner := pipeline.NewRunner(config, workDir, aiProv, aiKey, aiBaseURL)
+	logWriter := &redisLogWriter{
+		rdb:       processor.rdb,
+		channel   : fmt.Sprintf("logs:%s", payload.ProjectID),
+		projectID: payload.ProjectID.String(),
+	}
+
+	runner := pipeline.NewRunner(config, workDir, aiProv, aiKey, aiBaseURL, logWriter)
 	if err := runner.Execute(); err != nil {
 		log.Printf("Pipeline failed for Commit %s: %v", payload.CommitSHA, err)
 		return err

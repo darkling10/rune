@@ -15,6 +15,7 @@ import (
 	"github.com/deployerai/deployer/internal/worker"
 	"github.com/hibiken/asynq"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -51,9 +52,17 @@ func main() {
 		redisOpt = asynq.RedisClientOpt{Addr: "localhost:6379"}
 	}
 
+	// Initialize standard Redis client for PubSub
+	var rdb *redis.Client
+	if parsedUrl, err := redis.ParseURL(redisAddr); err == nil {
+		rdb = redis.NewClient(parsedUrl)
+	} else {
+		rdb = redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	}
+
 	// Initialize Task Worker Architecture
 	taskDistributor := worker.NewRedisTaskDistributor(redisOpt)
-	taskProcessor := worker.NewRedisTaskProcessor(redisOpt, projectRepo)
+	taskProcessor := worker.NewRedisTaskProcessor(redisOpt, projectRepo, rdb)
 
 	go func() {
 		log.Println("Starting Task Processor...")
@@ -63,7 +72,7 @@ func main() {
 	}()
 
 	// Initialize the API Server
-	server := api.NewServer(projectRepo, taskDistributor)
+	server := api.NewServer(projectRepo, taskDistributor, rdb)
 
 	// Define the HTTP server
 	srv := &http.Server{

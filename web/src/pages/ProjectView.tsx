@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import axios from 'axios'
-import { Key, Webhook, ArrowLeft, CheckCircle2 } from 'lucide-react'
+import { Key, Webhook, ArrowLeft, CheckCircle2, Terminal } from 'lucide-react'
 
 interface Project {
   id: string
@@ -18,9 +18,29 @@ export default function ProjectView() {
   const [apiKey, setApiKey] = useState('')
   const [keyStatus, setKeyStatus] = useState<string | null>(null)
 
+  const [logs, setLogs] = useState<string[]>([])
+  const logsEndRef = React.useRef<HTMLDivElement>(null)
+
   useEffect(() => {
     fetchProject()
+
+    // Connect to WebSocket
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const host = window.location.host // In dev, this is Vite (5173), so proxy handles it
+    const ws = new WebSocket(`${protocol}//${host}/api/v1/projects/${id}/logs/stream`)
+
+    ws.onmessage = (event) => {
+      setLogs((prev) => [...prev, event.data])
+    }
+
+    return () => {
+      ws.close()
+    }
   }, [id])
+
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [logs])
 
   const fetchProject = async () => {
     try {
@@ -132,6 +152,30 @@ export default function ProjectView() {
           </form>
         </div>
 
+      </div>
+      
+      {/* Live Pipeline Logs */}
+      <div className="bg-slate-950 rounded-xl shadow-xl overflow-hidden border border-slate-800">
+        <div className="flex items-center px-4 py-3 bg-slate-900 border-b border-slate-800">
+          <Terminal size={18} className="text-emerald-400 mr-2" />
+          <h2 className="text-sm font-semibold text-slate-200">Live Pipeline Logs</h2>
+          <div className="ml-auto flex gap-2">
+            <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
+            <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
+            <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
+          </div>
+        </div>
+        
+        <div className="p-4 h-96 overflow-y-auto font-mono text-xs text-slate-300 space-y-1">
+          {logs.length === 0 ? (
+            <div className="text-slate-600 italic">Waiting for pipeline execution...</div>
+          ) : (
+            logs.map((log, i) => (
+              <div key={i} className="whitespace-pre-wrap">{log}</div>
+            ))
+          )}
+          <div ref={logsEndRef} />
+        </div>
       </div>
 
     </div>
