@@ -25,7 +25,7 @@ Rune is built as a highly concurrent Go application using a true monorepo struct
 ## Getting Started
 
 ### Prerequisites
-- Go 1.22+
+- Go 1.25+
 - Node.js (for the React UI)
 - Docker & Docker Compose (for PostgreSQL, Redis, and Floci)
 
